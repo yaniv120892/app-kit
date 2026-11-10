@@ -147,7 +147,7 @@ export async function POST(request: Request): Promise<Response> {
   refuses everyone, alerting at most once per 15 minutes per feature and server instance. The
   first global refusal of the day raises an ops alert.
 - `reserveDailyBudget({ budget, subjectId, store, logger, alerts })` does one reservation without
-  the factory; its outage throttle lasts one call, so routes use the shared `dailyBudget`.
+  the factory; one-off reservations share a single outage throttle.
 - `ADVISOR_ENABLED=false` turns the feature off without a code change; call
   `isFeatureDisabled('advisor')` to hide its UI as well.
 
@@ -168,11 +168,8 @@ const nextConfig: NextConfig = {
 };
 ```
 
-The set is `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'`,
-`X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`,
-`Strict-Transport-Security: max-age=63072000` and a `Permissions-Policy` that turns camera,
-microphone and geolocation off unless `allowedFeatures` names one. The script and style parts of a
-CSP stay with the app: pass them as `contentSecurityPolicy` and `frame-ancestors 'none'` is added
+Camera, microphone and geolocation are off unless `allowedFeatures` names one. The script and
+style parts of a CSP stay with the app: pass them as `contentSecurityPolicy` and `frame-ancestors 'none'` is added
 unless the policy sets its own, in which case `X-Frame-Options` is left out so the two cannot
 disagree. List this entry first: when two entries set the same header for a
 path, Next keeps the later one, so a path-specific header after it wins.

@@ -26,6 +26,11 @@ export type RateLimitCheck = {
   clientId: string;
 };
 
+export type TimedRateLimitCheck = RateLimitCheck & {
+  /** The clock, in epoch milliseconds; defaults to now. */
+  now?: number;
+};
+
 export type RateLimitDecision =
   | { isAllowed: true }
   | { isAllowed: false; reason: 'overLimit' | 'storeUnavailable'; retryAfterSeconds: number };
@@ -42,7 +47,7 @@ export type RateLimiterOptions = GuardReporting & {
 };
 
 export type RateLimiter = {
-  check(request: RateLimitCheck & { now?: number }): Promise<RateLimitDecision>;
+  check(request: TimedRateLimitCheck): Promise<RateLimitDecision>;
   /** Takes the counts in order and stops at the first refusal; list the shortest window first. */
   checkAll(request: { checks: RateLimitCheck[]; now?: number }): Promise<RateLimitDecision>;
 };

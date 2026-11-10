@@ -1,6 +1,8 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 
-export const AUTHORIZATION_HEADER = 'authorization';
+import { AUTHORIZATION_HEADER } from './http-headers.js';
+
+export { AUTHORIZATION_HEADER } from './http-headers.js';
 
 const BEARER_CREDENTIAL = /^bearer +(.*)$/i;
 
@@ -16,7 +18,8 @@ export function secretsEqual({
   provided: string | null | undefined;
   expected: string | null | undefined;
 }): boolean {
-  if (!provided || !expected) {
+  const isEitherSideEmpty = !provided || !expected;
+  if (isEitherSideEmpty) {
     return false;
   }
   return timingSafeEqual(digest(provided), digest(expected));

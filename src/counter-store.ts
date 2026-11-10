@@ -1,3 +1,4 @@
+import { AUTHORIZATION_HEADER } from './http-headers.js';
 import type {
   CounterIncrement,
   CounterReading,
@@ -15,8 +16,7 @@ export type {
 
 /** A count sits in front of every guarded request, so a slow store is an outage, not a wait. */
 const DEFAULT_TIMEOUT_MS = 1000;
-/** Redis answers EXPIRE with 1 when it set the timeout. */
-const EXPIRE_APPLIED = 1;
+const EXPIRE_REPLY_WHEN_SET = 1;
 
 /**
  * Counts over the Upstash REST API with one `multi-exec` call, so the increment and its expiry
@@ -41,7 +41,10 @@ export function createUpstashCounterStore({
       try {
         const response = await fetchImplementation(`${baseUrl}/multi-exec`, {
           method: 'POST',
-          headers: { authorization: `Bearer ${bearerToken}`, 'content-type': 'application/json' },
+          headers: {
+            [AUTHORIZATION_HEADER]: `Bearer ${bearerToken}`,
+            'content-type': 'application/json',
+          },
           body: JSON.stringify([
             ['INCR', key],
             ['EXPIRE', key, String(ttlSeconds)],
@@ -72,7 +75,7 @@ async function readIncrementReply(response: Response): Promise<CounterReading> {
   if (!isCount) {
     return { status: 'unavailable', cause: 'failed', detail: 'INCR did not return a count' };
   }
-  if (expireResult !== EXPIRE_APPLIED) {
+  if (expireResult !== EXPIRE_REPLY_WHEN_SET) {
     return { status: 'unavailable', cause: 'failed', detail: 'EXPIRE was not applied' };
   }
   return { status: 'counted', hits: incrementResult };

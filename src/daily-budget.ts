@@ -31,6 +31,7 @@ const DAY_MS = DAY_SECONDS * 1000;
 const COUNTER_TTL_SECONDS = 2 * DAY_SECONDS;
 const DISABLED_VALUE = 'false';
 const FEATURE_NAME = /^[a-z][a-z0-9_]*$/;
+const ONE_OFF_OUTAGE_REPORTED_AT = new Map<string, number>();
 
 type BudgetScope = 'subject' | 'global';
 
@@ -50,13 +51,43 @@ type DailyCounter = {
  * `requireStore` holds) the feature answers no one, and an outage never becomes an unmetered
  * window. Outages are reported at most once per 15 minutes per feature and server instance.
  */
-export function createDailyBudget({
-  store,
-  logger,
-  alerts,
-  requireStore = isProductionDeployment(),
-}: DailyBudgetOptions): DailyBudgets {
-  const reportStoreOutage = createStoreOutageReporter({ logger, alerts });
+export function createDailyBudget(options: DailyBudgetOptions): DailyBudgets {
+  return dailyBudgetsWith({ options, outageReportedAt: new Map() });
+}
+
+/** One reservation without keeping a `createDailyBudget` around; outages share one throttle. */
+export async function reserveDailyBudget({
+  budget,
+  subjectId,
+  now,
+  ...options
+}: DailyBudgetReservation): Promise<DailyBudgetDecision> {
+  return dailyBudgetsWith({ options, outageReportedAt: ONE_OFF_OUTAGE_REPORTED_AT }).reserve({
+    budget,
+    subjectId,
+    now,
+  });
+}
+
+/** `<FEATURE>_ENABLED=false` turns a feature off without a deploy; anything else leaves it on. */
+export function isFeatureDisabled(feature: string): boolean {
+  assertFeatureName(feature);
+  const switchValue = process.env[`${feature.toUpperCase()}_ENABLED`];
+  return switchValue?.trim().toLowerCase() === DISABLED_VALUE;
+}
+
+function dailyBudgetsWith({
+  options: { store, logger, alerts, requireStore = isProductionDeployment() },
+  outageReportedAt,
+}: {
+  options: DailyBudgetOptions;
+  outageReportedAt: Map<string, number>;
+}): DailyBudgets {
+  const reportStoreOutage = createStoreOutageReporter({
+    logger,
+    alerts,
+    reportedAt: outageReportedAt,
+  });
 
   async function reserve({
     budget,
@@ -128,26 +159,6 @@ export function createDailyBudget({
   }
 
   return { reserve };
-}
-
-/**
- * One reservation without keeping a `createDailyBudget` around. Prefer the factory in an app: its
- * outage throttle lives as long as it does, while this one forgets it after every call.
- */
-export async function reserveDailyBudget({
-  budget,
-  subjectId,
-  now,
-  ...options
-}: DailyBudgetReservation): Promise<DailyBudgetDecision> {
-  return createDailyBudget(options).reserve({ budget, subjectId, now });
-}
-
-/** `<FEATURE>_ENABLED=false` turns a feature off without a deploy; anything else leaves it on. */
-export function isFeatureDisabled(feature: string): boolean {
-  assertFeatureName(feature);
-  const switchValue = process.env[`${feature.toUpperCase()}_ENABLED`];
-  return switchValue?.trim().toLowerCase() === DISABLED_VALUE;
 }
 
 function reportLimitReached({

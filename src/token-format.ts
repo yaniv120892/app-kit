@@ -44,7 +44,8 @@ export function createSignedTokenFormat({
         prefix,
         encodedLength: BODY_LENGTH + SIGNATURE_LENGTH,
       });
-      if (!secret || !hasShape) {
+      const isUnverifiable = !secret || !hasShape;
+      if (isUnverifiable) {
         return false;
       }
       const body = token.slice(prefix.length, prefix.length + BODY_LENGTH);
@@ -75,7 +76,6 @@ function unsetSecretError({ purpose, prefix }: { purpose: string; prefix: string
   );
 }
 
-/** The prefix, then exactly `encodedLength` base64url characters. */
 function hasLayout({
   token,
   prefix,

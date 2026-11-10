@@ -2,7 +2,6 @@ import type { CounterStoreFailureCause } from './counter-store.types.js';
 import type { GuardReporting } from './guard-reporting.types.js';
 import type { StoreOutageReport, StoreOutageReporter } from './store-outage.types.js';
 
-/** The `Retry-After` a guard answers with while its counter store is down. */
 export const STORE_UNAVAILABLE_RETRY_AFTER_SECONDS = 60;
 
 const OUTAGE_REPORT_INTERVAL_MS = 15 * 60 * 1000;
@@ -30,8 +29,11 @@ export function isStoreOutage({
  * down for every request is one report, not one per request. The memory is per server instance:
  * each new serverless instance reports once.
  */
-export function createStoreOutageReporter({ logger, alerts }: GuardReporting): StoreOutageReporter {
-  const reportedAt = new Map<string, number>();
+export function createStoreOutageReporter({
+  logger,
+  alerts,
+  reportedAt = new Map<string, number>(),
+}: GuardReporting & { reportedAt?: Map<string, number> }): StoreOutageReporter {
   return function reportStoreOutage({
     throttleKey,
     logMessage,
@@ -41,7 +43,9 @@ export function createStoreOutageReporter({ logger, alerts }: GuardReporting): S
   }: StoreOutageReport): void {
     const lastReportedAt = reportedAt.get(throttleKey);
     const isReportedRecently =
-      lastReportedAt !== undefined && now - lastReportedAt < OUTAGE_REPORT_INTERVAL_MS;
+      lastReportedAt !== undefined &&
+      now >= lastReportedAt &&
+      now - lastReportedAt < OUTAGE_REPORT_INTERVAL_MS;
     if (isReportedRecently) {
       return;
     }

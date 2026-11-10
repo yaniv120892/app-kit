@@ -7,6 +7,7 @@ import type {
   RateLimiterOptions,
   RateLimitPolicy,
   RateLimitRefusal,
+  TimedRateLimitCheck,
 } from './rate-limit.types.js';
 import { secondsUntil } from './seconds-until.js';
 import {
@@ -25,6 +26,7 @@ export type {
   RateLimitPolicy,
   RateLimitRefusal,
   RateLimitStoreOutage,
+  TimedRateLimitCheck,
 } from './rate-limit.types.js';
 
 export const RETRY_AFTER_HEADER = 'retry-after';
@@ -50,7 +52,7 @@ export function createRateLimiter({
     policy,
     clientId,
     now = Date.now(),
-  }: RateLimitCheck & { now?: number }): Promise<RateLimitDecision> {
+  }: TimedRateLimitCheck): Promise<RateLimitDecision> {
     assertPolicyNumbers(policy);
     const windowMs = policy.windowSeconds * 1000;
     const windowIndex = Math.floor(now / windowMs);

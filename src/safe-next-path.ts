@@ -1,6 +1,5 @@
 const PLACEHOLDER_ORIGIN = 'https://same-site.invalid';
 const MAX_DECODE_ROUNDS = 3;
-/** Browsers drop tabs and newlines inside a URL, so `/\t/evil.example` arrives as `//evil.example`. */
 const LAST_C0_CONTROL_CODE = 0x1f;
 const DELETE_CODE = 0x7f;
 const LEADING_DOUBLE_SLASH = /^[/\\]{2}/;
@@ -56,6 +55,7 @@ function isUnsafeForm(form: string): boolean {
   return hasControlCharacter(form) || form.includes('\\') || LEADING_DOUBLE_SLASH.test(form);
 }
 
+/** Browsers drop tabs and newlines inside a URL, so `/\t/evil.example` arrives as `//evil.example`. */
 function hasControlCharacter(form: string): boolean {
   return [...form].some((character) => {
     const code = character.charCodeAt(0);

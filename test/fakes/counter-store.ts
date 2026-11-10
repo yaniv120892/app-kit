@@ -39,7 +39,6 @@ export function createFakeCounterStore({
   };
 }
 
-/** Runs `attempt` `times` times in sequence and returns every result in order. */
 export async function repeatInSequence<Result>({
   times,
   attempt,

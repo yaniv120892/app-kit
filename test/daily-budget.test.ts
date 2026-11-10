@@ -194,6 +194,22 @@ describe('reserveDailyBudget', () => {
     expect(decision).toEqual({ isAllowed: true });
     expect(store.incrementedKeys).toHaveLength(2);
   });
+
+  it('throttles outage alerts across one-off reservations', async () => {
+    const reporting = createRecordingReporting();
+    const reserveOnce = () =>
+      reserveDailyBudget({
+        budget: { ...ADVISOR, feature: 'one_off' },
+        subjectId: 'user-1',
+        store: createFakeCounterStore({ failure: FAILED_STORE }),
+        ...reporting,
+        now: NOON_UTC,
+      });
+
+    await repeatInSequence({ times: 3, attempt: reserveOnce });
+
+    expect(reporting.scheduledAlerts).toHaveLength(1);
+  });
 });
 
 describe('isFeatureDisabled', () => {

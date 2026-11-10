@@ -13,7 +13,6 @@ export function readClientAddress(headers: Headers): string {
   return firstHop || UNKNOWN_CLIENT;
 }
 
-/** The rate-limit client id for a request's address. */
 export function addressClient(headers: Headers): string {
   return `ip:${readClientAddress(headers)}`;
 }
