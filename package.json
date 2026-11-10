@@ -1,0 +1,73 @@
+{
+  "name": "@yaniv120892/app-kit",
+  "version": "0.1.0",
+  "description": "Server guards my apps share: rate limits, daily budgets, security headers, redirect and secret checks",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    "./client-address": {
+      "types": "./dist/client-address.d.ts",
+      "import": "./dist/client-address.js",
+      "default": "./dist/client-address.js"
+    },
+    "./counter-store": {
+      "types": "./dist/counter-store.d.ts",
+      "import": "./dist/counter-store.js",
+      "default": "./dist/counter-store.js"
+    },
+    "./daily-budget": {
+      "types": "./dist/daily-budget.d.ts",
+      "import": "./dist/daily-budget.js",
+      "default": "./dist/daily-budget.js"
+    },
+    "./rate-limit": {
+      "types": "./dist/rate-limit.d.ts",
+      "import": "./dist/rate-limit.js",
+      "default": "./dist/rate-limit.js"
+    },
+    "./safe-next-path": {
+      "types": "./dist/safe-next-path.d.ts",
+      "import": "./dist/safe-next-path.js",
+      "default": "./dist/safe-next-path.js"
+    },
+    "./secrets": {
+      "types": "./dist/secrets.d.ts",
+      "import": "./dist/secrets.js",
+      "default": "./dist/secrets.js"
+    },
+    "./security-headers": {
+      "types": "./dist/security-headers.d.ts",
+      "import": "./dist/security-headers.js",
+      "default": "./dist/security-headers.js"
+    },
+    "./token-format": {
+      "types": "./dist/token-format.d.ts",
+      "import": "./dist/token-format.js",
+      "default": "./dist/token-format.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepare": "npm run build",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "prettier": "@yaniv120892/dev-config/prettier",
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@yaniv120892/dev-config": "github:yaniv120892/dev-config#v0.1.6",
+    "eslint": "^10.14.0",
+    "prettier": "^3.9.10",
+    "typescript": "~6.0.3",
+    "vitest": "^5.1.0"
+  }
+}
