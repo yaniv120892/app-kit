@@ -27,10 +27,10 @@ Then check that the lockfile's `resolved` names the tag's commit.
 
 The package reads only these; everything else is passed in.
 
-| Variable            | Read by                                   | Effect                                                                           |
-| ------------------- | ----------------------------------------- | -------------------------------------------------------------------------------- |
-| `VERCEL_ENV`        | rate limits, daily budgets                | An unconfigured counter store is an outage only when this is `production`.       |
-| `<FEATURE>_ENABLED` | `reserveDailyBudget`, `isFeatureDisabled` | `false` turns the feature off for everyone; unset or anything else leaves it on. |
+| Variable            | Read by                            | Effect                                                                           |
+| ------------------- | ---------------------------------- | -------------------------------------------------------------------------------- |
+| `VERCEL_ENV`        | rate limits, daily budgets         | The default for `requireStore`: true only when this is `production`.             |
+| `<FEATURE>_ENABLED` | daily budgets, `isFeatureDisabled` | `false` turns the feature off for everyone; unset or anything else leaves it on. |
 
 The app passes `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` to the store, and its cron
 secret and token-signing secret to the checks that need them.
@@ -41,6 +41,7 @@ Create these once, in `src/lib/guards.ts`:
 
 ```ts
 import { createUpstashCounterStore } from '@yaniv120892/app-kit/counter-store';
+import { createDailyBudget } from '@yaniv120892/app-kit/daily-budget';
 import { createRateLimiter } from '@yaniv120892/app-kit/rate-limit';
 import { logger, observability } from '@/lib/observability';
 
@@ -52,11 +53,18 @@ export const counterStore = createUpstashCounterStore({
 export const guardReporting = { logger, alerts: observability };
 
 export const rateLimiter = createRateLimiter({ store: counterStore, ...guardReporting });
+
+export const dailyBudget = createDailyBudget({ store: counterStore, ...guardReporting });
 ```
 
 The store makes one `multi-exec` call per count with a 1 second timeout and no retry, and reports
 an unset URL or token as `unconfigured` rather than throwing. `alerts` is anything with
 `scheduleOpsAlert({ alertType, title })`, so the app's observability instance goes in as is.
+
+`requireStore` decides whether a store nobody configured is an outage. It defaults to
+`VERCEL_ENV === 'production'`, so a development server and a preview without Redis run unguarded,
+and production refuses or alerts per policy. An app on a host that does not set `VERCEL_ENV`
+passes `requireStore: true` to both factories, or every guard there fails open with nothing said.
 
 ## Rate limits
 
@@ -86,27 +94,31 @@ export async function POST(request: Request): Promise<Response> {
 }
 ```
 
-- `whenStoreUnavailable: 'allow'` lets requests through while the store is down and alerts at most
-  once per 15 minutes per policy: use it where locking every member out is worse than a window
-  with no limit (sign-in). `'refuse'` answers 503 and alerts: use it for anything that opens
-  accounts, redeems invites, sends mail or costs money.
-- An unconfigured store is allowed silently outside `VERCEL_ENV=production`, so a development
-  server and a preview without Redis still work. On production it is an outage like any other.
+- `whenStoreUnavailable: 'allow'` lets requests through while the store is down: use it where
+  locking every member out is worse than a window with no limit (sign-in). `'refuse'` answers 503:
+  use it for anything that opens accounts, redeems invites, sends mail or costs money. Either way
+  the outage is logged and alerted at most once per 15 minutes per policy and server instance, so
+  each new serverless instance reports it once.
+- Limits and windows must be positive whole numbers; anything else throws rather than refusing
+  everyone in silence.
 - List several checks shortest window first. Counting stops at the first refusal, so a client
   retrying after a per-minute 429 does not burn its daily allowance.
 - Refusals are 429 (over the limit) or 503 (store down), each with `Retry-After`. Use
   `rateLimiter.checkAll` and `rateLimitRefusalResponse` directly when the route answers in another
   shape.
 - `addressClient` keys on the first `x-forwarded-for` entry, which is the client only because the
-  edge proxy overwrites that header. For a signed-in user, key on `user:<id>`; for an email, key on
-  a hash of it, never the address.
+  edge proxy overwrites that header. A request without one is `ip:unknown`, one bucket shared by
+  all such requests; on a host that does not set the header, skip the address limit instead. For
+  a signed-in user, key on `user:<id>`; for an email, key on a hash of it, never the address.
+- The first refusal in a window is logged with the client id as `client`, unredacted, so an
+  address-keyed limit logs the raw IP.
 
 ## Daily budgets
 
 ```ts
 // src/app/api/advisor/route.ts
-import { reserveDailyBudget, type DailyBudget } from '@yaniv120892/app-kit/daily-budget';
-import { counterStore, guardReporting } from '@/lib/guards';
+import type { DailyBudget } from '@yaniv120892/app-kit/daily-budget';
+import { dailyBudget } from '@/lib/guards';
 
 const ADVISOR_BUDGET: DailyBudget = {
   feature: 'advisor',
@@ -116,12 +128,7 @@ const ADVISOR_BUDGET: DailyBudget = {
 
 export async function POST(request: Request): Promise<Response> {
   const { userId } = await requireSession(request);
-  const decision = await reserveDailyBudget({
-    budget: ADVISOR_BUDGET,
-    subjectId: userId,
-    store: counterStore,
-    ...guardReporting,
-  });
+  const decision = await dailyBudget.reserve({ budget: ADVISOR_BUDGET, subjectId: userId });
   if (!decision.isAllowed) {
     return advisorRefusal(decision);
   }
@@ -130,12 +137,17 @@ export async function POST(request: Request): Promise<Response> {
 ```
 
 - Reserve before the paid call. The subject's count is spent first, so a subject refused for its
-  own limit never spends the global budget.
+  own limit never spends the global budget. The other side of that order: a use the global budget
+  then refuses still counts against the subject, so keep subject limits well above what one
+  person meets on a day the global budget runs out.
 - The decision's `reason` is `disabled` (kill switch), `subjectDailyLimit`, `globalDailyLimit` or
   `storeUnavailable`; all but `disabled` carry `retryAfterSeconds`. Map them to the answer the
   feature gives.
-- It fails closed: with the store down, or unconfigured on production, the feature refuses
-  everyone. The first global refusal of the day raises an ops alert.
+- It fails closed: with the store down, or unconfigured where `requireStore` holds, the feature
+  refuses everyone, alerting at most once per 15 minutes per feature and server instance. The
+  first global refusal of the day raises an ops alert.
+- `reserveDailyBudget({ budget, subjectId, store, logger, alerts })` does one reservation without
+  the factory; its outage throttle lasts one call, so routes use the shared `dailyBudget`.
 - `ADVISOR_ENABLED=false` turns the feature off without a code change; call
   `isFeatureDisabled('advisor')` to hide its UI as well.
 
@@ -161,7 +173,8 @@ The set is `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'n
 `Strict-Transport-Security: max-age=63072000` and a `Permissions-Policy` that turns camera,
 microphone and geolocation off unless `allowedFeatures` names one. The script and style parts of a
 CSP stay with the app: pass them as `contentSecurityPolicy` and `frame-ancestors 'none'` is added
-unless the policy sets its own. List this entry first: when two entries set the same header for a
+unless the policy sets its own, in which case `X-Frame-Options` is left out so the two cannot
+disagree. List this entry first: when two entries set the same header for a
 path, Next keeps the later one, so a path-specific header after it wins.
 
 ## Redirect after sign-in
@@ -192,7 +205,8 @@ export async function GET(request: Request): Promise<Response> {
 ```
 
 It answers 401 to a missing or wrong `Authorization: Bearer` header and 503 to every request while
-the secret is unset, so a deployment missing it shows as a failing job. `secretsEqual` compares two
+the secret is unset, so a deployment missing it shows as a failing job. The secret is trimmed
+before the comparison, so one pasted with a trailing newline still matches. `secretsEqual` compares two
 secrets in constant time and never matches an empty side; `isBearerAuthorized` is the boolean form
 of the cron check for other shared-secret callers.
 
@@ -226,6 +240,23 @@ if (!hasTokenShape({ token, prefix: 'msk_mcp_' })) {
   return unauthorized();
 }
 ```
+
+## Adoption notes
+
+Moving my-investments' advisor budget onto `daily-budget` keeps every `alertType`, so the ops
+alerter's caps carry over, but renames these log lines and fields; move any saved search or
+dashboard on the old names with it:
+
+| Before                                     | After                                    |
+| ------------------------------------------ | ---------------------------------------- |
+| `advisor_user_daily_limit_reached`         | `daily_budget_subject_limit_reached`     |
+| `advisor_global_daily_limit_reached`       | `daily_budget_global_limit_reached`      |
+| `advisor_budget_refused_store_unavailable` | `daily_budget_refused_store_unavailable` |
+| field `userId`                             | field `subjectId`, plus `feature`        |
+| store key `advisor_budget:user:<id>:<day>` | `advisor_budget:subject:<id>:<day>`      |
+
+The new keys start from zero, so each subject's count restarts on the day of the switch. The
+alert titles say "uses" where they said "turns".
 
 ## Release
 

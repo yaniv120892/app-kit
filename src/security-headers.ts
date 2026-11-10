@@ -1,3 +1,4 @@
+import { BROWSER_FEATURES } from './browser-features.js';
 import type {
   BrowserFeature,
   SecurityHeader,
@@ -13,11 +14,6 @@ export type {
 const FRAME_ANCESTORS_DIRECTIVE = 'frame-ancestors';
 const DENY_FRAMING = `${FRAME_ANCESTORS_DIRECTIVE} 'none'`;
 const TWO_YEARS_SECONDS = 2 * 365 * 24 * 60 * 60;
-const BROWSER_FEATURES = {
-  camera: true,
-  microphone: true,
-  geolocation: true,
-} satisfies Record<BrowserFeature, true>;
 
 /**
  * The headers every page gets: no framing, no MIME sniffing, the origin only on cross-site
@@ -31,9 +27,19 @@ export function securityHeaders({
   contentSecurityPolicy = '',
   allowedFeatures = [],
 }: SecurityHeadersOptions = {}): SecurityHeader[] {
+  const directives = contentSecurityPolicy
+    .split(';')
+    .map((directive) => directive.trim())
+    .filter((directive) => directive !== '');
+  const setsOwnFrameAncestors = directives.some(namesFrameAncestors);
+  const framingHeaders: SecurityHeader[] = setsOwnFrameAncestors
+    ? [{ key: 'Content-Security-Policy', value: directives.join('; ') }]
+    : [
+        { key: 'X-Frame-Options', value: 'DENY' },
+        { key: 'Content-Security-Policy', value: [...directives, DENY_FRAMING].join('; ') },
+      ];
   return [
-    { key: 'X-Frame-Options', value: 'DENY' },
-    { key: 'Content-Security-Policy', value: withFramingDenied(contentSecurityPolicy) },
+    ...framingHeaders,
     { key: 'X-Content-Type-Options', value: 'nosniff' },
     { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
     { key: 'Strict-Transport-Security', value: `max-age=${TWO_YEARS_SECONDS}` },
@@ -41,22 +47,12 @@ export function securityHeaders({
   ];
 }
 
-function withFramingDenied(contentSecurityPolicy: string): string {
-  const directives = contentSecurityPolicy
-    .split(';')
-    .map((directive) => directive.trim())
-    .filter((directive) => directive !== '');
-  const namesFrameAncestors = directives.some(
-    (directive) => directive.split(/\s+/)[0]?.toLowerCase() === FRAME_ANCESTORS_DIRECTIVE,
-  );
-  return (namesFrameAncestors ? directives : [...directives, DENY_FRAMING]).join('; ');
+function namesFrameAncestors(directive: string): boolean {
+  return directive.split(/\s+/)[0]?.toLowerCase() === FRAME_ANCESTORS_DIRECTIVE;
 }
 
 function permissionsPolicy(allowedFeatures: BrowserFeature[]): string {
-  return Object.keys(BROWSER_FEATURES)
-    .map(
-      (feature) =>
-        `${feature}=${allowedFeatures.some((allowed) => allowed === feature) ? '(self)' : '()'}`,
-    )
-    .join(', ');
+  return BROWSER_FEATURES.map(
+    (feature) => `${feature}=${allowedFeatures.includes(feature) ? '(self)' : '()'}`,
+  ).join(', ');
 }

@@ -19,7 +19,10 @@ export type RateLimitPolicy = {
 
 export type RateLimitCheck = {
   policy: RateLimitPolicy;
-  /** Who is counted, e.g. `ip:<address>` or `user:<id>`; never a raw email. */
+  /**
+   * Who is counted, e.g. `ip:<address>` or `user:<id>`; never a raw email. It is logged as is,
+   * as `client`, on the first refusal in a window.
+   */
   clientId: string;
 };
 
@@ -31,6 +34,11 @@ export type RateLimitRefusal = Extract<RateLimitDecision, { isAllowed: false }>;
 
 export type RateLimiterOptions = GuardReporting & {
   store: CounterStore;
+  /**
+   * Whether a store nobody configured counts as an outage. Defaults to true on the production
+   * deployment (`VERCEL_ENV=production`) only; pass true on a host that does not set it.
+   */
+  requireStore?: boolean;
 };
 
 export type RateLimiter = {

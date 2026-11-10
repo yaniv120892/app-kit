@@ -10,6 +10,7 @@ describe('safeNextPath', () => {
     '/search?q=100%',
     '/reports#month',
     '/a/b/c?next=%2Fsettings',
+    '/caf%C3%A9',
   ])('keeps the same-site path %j unchanged', (path) => {
     expect(safeNextPath(path)).toBe(path);
   });
@@ -35,6 +36,9 @@ describe('safeNextPath', () => {
     ['a NUL', '/settings%00'],
     ['DEL', '/settings\u007f'],
     ['encoding that never settles', '/%25252525252F'],
+    ['an encoded second slash beside a malformed escape', '/%2Fevil.example%'],
+    ['an encoded backslash beside a literal percent', '/%5Cevil.example?q=100%'],
+    ['an encoded second slash beside a bad escape', '/%2Fevil.example?x=%zz'],
   ])('drops %s', (_case, raw) => {
     expect(safeNextPath(raw)).toBeNull();
   });

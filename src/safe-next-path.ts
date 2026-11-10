@@ -4,6 +4,7 @@ const MAX_DECODE_ROUNDS = 3;
 const LAST_C0_CONTROL_CODE = 0x1f;
 const DELETE_CODE = 0x7f;
 const LEADING_DOUBLE_SLASH = /^[/\\]{2}/;
+const PERCENT_ESCAPE = /%([0-9a-f]{2})/gi;
 
 /**
  * The `?next=` path to send a user to after sign-in, or null when it could leave the site. Only a
@@ -28,16 +29,17 @@ export function safeNextPath(raw: string | null | undefined): string | null {
 }
 
 /**
- * The value and each percent-decoding of it, or null when decoding never settles. A malformed
- * escape (a literal `%` in a query) ends the decoding: no reader can decode past it either.
+ * The value and each percent-decoding of it, or null when decoding never settles. Each `%XX`
+ * escape is decoded on its own, so a malformed one elsewhere (a literal `%` in a query) cannot
+ * hide `%2F` from the check the way a whole-string decode that throws would; lenient readers
+ * decode those escapes regardless.
  */
 function decodedFormsOf(raw: string): string[] | null {
   const forms = [raw];
   let current = raw;
   for (let round = 0; round < MAX_DECODE_ROUNDS; round++) {
-    const decoded = decodeOrNull(current);
-    const isSettled = decoded === null || decoded === current;
-    if (isSettled) {
+    const decoded = current.replace(PERCENT_ESCAPE, decodeEscape);
+    if (decoded === current) {
       return forms;
     }
     forms.push(decoded);
@@ -46,12 +48,8 @@ function decodedFormsOf(raw: string): string[] | null {
   return null;
 }
 
-function decodeOrNull(value: string): string | null {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return null;
-  }
+function decodeEscape(_escape: string, hexDigits: string): string {
+  return String.fromCharCode(Number.parseInt(hexDigits, 16));
 }
 
 function isUnsafeForm(form: string): boolean {

@@ -15,6 +15,8 @@ export type {
 
 /** A count sits in front of every guarded request, so a slow store is an outage, not a wait. */
 const DEFAULT_TIMEOUT_MS = 1000;
+/** Redis answers EXPIRE with 1 when it set the timeout. */
+const EXPIRE_APPLIED = 1;
 
 /**
  * Counts over the Upstash REST API with one `multi-exec` call, so the increment and its expiry
@@ -54,29 +56,30 @@ export function createUpstashCounterStore({
   };
 }
 
-/** The detail names the status or error only, never the command, which carries the key. */
+/**
+ * The count, once both commands report success: an EXPIRE that failed would leave a key that
+ * never expires, so it is a failed count too. The detail names the status or the step only, never
+ * the command, which carries the key.
+ */
 async function readIncrementReply(response: Response): Promise<CounterReading> {
   if (!response.ok) {
+    await response.body?.cancel();
     return { status: 'unavailable', cause: 'failed', detail: `HTTP ${response.status}` };
   }
   const reply: unknown = await response.json();
-  const hits = firstResult(reply);
-  if (hits === null) {
-    return { status: 'unavailable', cause: 'failed', detail: 'unexpected reply shape' };
+  const [incrementResult, expireResult] = Array.isArray(reply) ? reply.map(resultOf) : [];
+  const isCount = typeof incrementResult === 'number' && Number.isInteger(incrementResult);
+  if (!isCount) {
+    return { status: 'unavailable', cause: 'failed', detail: 'INCR did not return a count' };
   }
-  return { status: 'counted', hits };
+  if (expireResult !== EXPIRE_APPLIED) {
+    return { status: 'unavailable', cause: 'failed', detail: 'EXPIRE was not applied' };
+  }
+  return { status: 'counted', hits: incrementResult };
 }
 
-function firstResult(reply: unknown): number | null {
-  if (!Array.isArray(reply)) {
-    return null;
-  }
-  const [first]: unknown[] = reply;
-  if (typeof first !== 'object' || first === null || !('result' in first)) {
-    return null;
-  }
-  const { result } = first;
-  return typeof result === 'number' && Number.isInteger(result) ? result : null;
+function resultOf(entry: unknown): unknown {
+  return typeof entry === 'object' && entry !== null && 'result' in entry ? entry.result : null;
 }
 
 function describeFailure(error: unknown): string {

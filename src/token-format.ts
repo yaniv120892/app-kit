@@ -8,14 +8,14 @@ const RANDOM_BYTES = 32;
 /** 32 bytes in unpadded base64url. */
 const BODY_LENGTH = 43;
 const SIGNATURE_LENGTH = 16;
-const BASE64URL = '[A-Za-z0-9_-]';
+const BASE64URL = /^[A-Za-z0-9_-]*$/;
 
 /**
  * Whether `token` is `prefix` followed by 32 random bytes in base64url, the form every app mints.
  * Run it before the database lookup, so a malformed or truncated token costs no query.
  */
 export function hasTokenShape({ token, prefix }: { token: string; prefix: string }): boolean {
-  return shapePattern({ prefix, suffixLength: 0 }).test(token);
+  return hasLayout({ token, prefix, encodedLength: BODY_LENGTH });
 }
 
 /**
@@ -28,8 +28,6 @@ export function createSignedTokenFormat({
   purpose,
   readSecret,
 }: SignedTokenFormatOptions): SignedTokenFormat {
-  const pattern = shapePattern({ prefix, suffixLength: SIGNATURE_LENGTH });
-
   return {
     mint() {
       const secret = readSecret();
@@ -41,7 +39,11 @@ export function createSignedTokenFormat({
     },
     isAuthentic(token) {
       const secret = readSecret();
-      const hasShape = pattern.test(token);
+      const hasShape = hasLayout({
+        token,
+        prefix,
+        encodedLength: BODY_LENGTH + SIGNATURE_LENGTH,
+      });
       if (!secret || !hasShape) {
         return false;
       }
@@ -73,7 +75,16 @@ function unsetSecretError({ purpose, prefix }: { purpose: string; prefix: string
   );
 }
 
-function shapePattern({ prefix, suffixLength }: { prefix: string; suffixLength: number }): RegExp {
-  const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`^${escapedPrefix}${BASE64URL}{${BODY_LENGTH + suffixLength}}$`);
+/** The prefix, then exactly `encodedLength` base64url characters. */
+function hasLayout({
+  token,
+  prefix,
+  encodedLength,
+}: {
+  token: string;
+  prefix: string;
+  encodedLength: number;
+}): boolean {
+  const encoded = token.slice(prefix.length);
+  return token.startsWith(prefix) && encoded.length === encodedLength && BASE64URL.test(encoded);
 }

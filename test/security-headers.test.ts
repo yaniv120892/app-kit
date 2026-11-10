@@ -31,7 +31,7 @@ describe('securityHeaders', () => {
     );
   });
 
-  it('keeps the frame-ancestors an app policy sets itself', () => {
+  it('keeps the frame-ancestors an app policy sets itself, without a contradicting XFO', () => {
     const headers = securityHeaders({
       contentSecurityPolicy: "default-src 'self'; Frame-Ancestors 'self'",
     });
@@ -39,6 +39,7 @@ describe('securityHeaders', () => {
     expect(headerValue({ name: 'Content-Security-Policy', headers })).toBe(
       "default-src 'self'; Frame-Ancestors 'self'",
     );
+    expect(headerValue({ name: 'X-Frame-Options', headers })).toBeUndefined();
   });
 
   it('allows a feature the app uses for its own origin only', () => {

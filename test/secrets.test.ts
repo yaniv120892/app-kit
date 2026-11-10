@@ -36,6 +36,12 @@ describe('isBearerAuthorized', () => {
     );
   });
 
+  it('matches a secret stored with a trailing newline', () => {
+    const headers = new Headers({ authorization: `Bearer ${SECRET}` });
+
+    expect(isBearerAuthorized({ headers, secret: `${SECRET}\n` })).toBe(true);
+  });
+
   it('authorizes nothing while the secret is unset', () => {
     const headers = new Headers({ authorization: 'Bearer ' });
 

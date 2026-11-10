@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 
 export const AUTHORIZATION_HEADER = 'authorization';
 
-const BEARER_SCHEME = /^bearer +/i;
+const BEARER_CREDENTIAL = /^bearer +(.*)$/i;
 
 /**
  * Compares SHA-256 digests in constant time, so neither the content nor the length of the
@@ -22,7 +22,10 @@ export function secretsEqual({
   return timingSafeEqual(digest(provided), digest(expected));
 }
 
-/** Whether `headers` carry `Authorization: Bearer <secret>`; false when the secret is unset. */
+/**
+ * Whether `headers` carry `Authorization: Bearer <secret>`; false when the secret is unset. The
+ * secret is trimmed, as a header value is, so one pasted with a trailing newline still matches.
+ */
 export function isBearerAuthorized({
   headers,
   secret,
@@ -30,12 +33,8 @@ export function isBearerAuthorized({
   headers: Headers;
   secret: string | undefined;
 }): boolean {
-  const authorization = headers.get(AUTHORIZATION_HEADER) ?? '';
-  const hasBearerScheme = BEARER_SCHEME.test(authorization);
-  if (!hasBearerScheme) {
-    return false;
-  }
-  return secretsEqual({ provided: authorization.replace(BEARER_SCHEME, ''), expected: secret });
+  const [, provided] = BEARER_CREDENTIAL.exec(headers.get(AUTHORIZATION_HEADER) ?? '') ?? [];
+  return secretsEqual({ provided, expected: secret?.trim() });
 }
 
 /**

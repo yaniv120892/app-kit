@@ -5,10 +5,16 @@ import {
   refuseIfRateLimited,
 } from '../src/rate-limit.js';
 import type { RateLimitPolicy } from '../src/rate-limit.types.js';
-import { createFakeCounterStore } from './fakes/counter-store.js';
+import {
+  createFakeCounterStore,
+  FAILED_STORE,
+  repeatInSequence,
+  UNCONFIGURED_STORE,
+} from './fakes/counter-store.js';
 import { createRecordingReporting } from './fakes/reporting.js';
 
 const WINDOW_START = Date.UTC(2026, 10, 10, 12, 0, 0);
+const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
 const CLIENT = 'ip:203.0.113.7';
 
 const LOGIN: RateLimitPolicy = {
@@ -32,9 +38,6 @@ const SIGNUP_DAILY: RateLimitPolicy = {
   whenStoreUnavailable: 'refuse',
 };
 
-const FAILED_STORE = { status: 'unavailable', cause: 'failed', detail: 'timed out' } as const;
-const UNCONFIGURED_STORE = { status: 'unavailable', cause: 'unconfigured' } as const;
-
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.useRealTimers();
@@ -42,16 +45,22 @@ afterEach(() => {
 
 describe('createRateLimiter', () => {
   it('allows up to the limit and refuses the next hit until the window ends', async () => {
-    const reporting = createRecordingReporting();
-    const rateLimiter = createRateLimiter({ store: createFakeCounterStore(), ...reporting });
-    const now = WINDOW_START + 15_000;
+    const rateLimiter = createRateLimiter({
+      store: createFakeCounterStore(),
+      ...createRecordingReporting(),
+    });
 
-    const first = await rateLimiter.check({ policy: SIGNUP, clientId: CLIENT, now });
-    const second = await rateLimiter.check({ policy: SIGNUP, clientId: CLIENT, now });
-    const third = await rateLimiter.check({ policy: SIGNUP, clientId: CLIENT, now });
+    const decisions = await repeatInSequence({
+      times: 3,
+      attempt: () =>
+        rateLimiter.check({ policy: SIGNUP, clientId: CLIENT, now: WINDOW_START + 15_000 }),
+    });
 
-    expect([first, second]).toEqual([{ isAllowed: true }, { isAllowed: true }]);
-    expect(third).toEqual({ isAllowed: false, reason: 'overLimit', retryAfterSeconds: 45 });
+    expect(decisions).toEqual([
+      { isAllowed: true },
+      { isAllowed: true },
+      { isAllowed: false, reason: 'overLimit', retryAfterSeconds: 45 },
+    ]);
   });
 
   it('counts each window apart, so the next window starts from zero', async () => {
@@ -59,9 +68,10 @@ describe('createRateLimiter', () => {
       store: createFakeCounterStore(),
       ...createRecordingReporting(),
     });
-    for (const _hit of [1, 2, 3]) {
-      await rateLimiter.check({ policy: SIGNUP, clientId: CLIENT, now: WINDOW_START });
-    }
+    await repeatInSequence({
+      times: 3,
+      attempt: () => rateLimiter.check({ policy: SIGNUP, clientId: CLIENT, now: WINDOW_START }),
+    });
 
     const nextWindow = await rateLimiter.check({
       policy: SIGNUP,
@@ -76,35 +86,44 @@ describe('createRateLimiter', () => {
     const reporting = createRecordingReporting();
     const rateLimiter = createRateLimiter({ store: createFakeCounterStore(), ...reporting });
 
-    for (const _hit of [1, 2, 3, 4, 5]) {
-      await rateLimiter.check({ policy: SIGNUP, clientId: CLIENT, now: WINDOW_START });
-    }
+    await repeatInSequence({
+      times: 5,
+      attempt: () => rateLimiter.check({ policy: SIGNUP, clientId: CLIENT, now: WINDOW_START }),
+    });
 
     expect(reporting.lines).toEqual([
       expect.objectContaining({ level: 'warn', message: 'rate_limit_exceeded' }),
     ]);
   });
 
-  it('refuses with 503 semantics and alerts when a refuse policy cannot count', async () => {
+  it('refuses when a refuse policy cannot count, alerting once per 15 minutes', async () => {
     const reporting = createRecordingReporting();
     const rateLimiter = createRateLimiter({
       store: createFakeCounterStore({ failure: FAILED_STORE }),
       ...reporting,
     });
 
-    const decision = await rateLimiter.check({ policy: SIGNUP, clientId: CLIENT });
+    const decisions = [
+      await rateLimiter.check({ policy: SIGNUP, clientId: CLIENT, now: WINDOW_START }),
+      await rateLimiter.check({ policy: SIGNUP, clientId: CLIENT, now: WINDOW_START + 60_000 }),
+      await rateLimiter.check({
+        policy: SIGNUP,
+        clientId: CLIENT,
+        now: WINDOW_START + FIFTEEN_MINUTES_MS,
+      }),
+    ];
 
-    expect(decision).toEqual({
-      isAllowed: false,
-      reason: 'storeUnavailable',
-      retryAfterSeconds: 60,
-    });
-    expect(reporting.scheduledAlerts).toEqual([
-      expect.objectContaining({ alertType: 'rate_limit_store_unavailable' }),
+    expect(decisions).toEqual(
+      Array(3).fill({ isAllowed: false, reason: 'storeUnavailable', retryAfterSeconds: 60 }),
+    );
+    expect(reporting.scheduledAlerts.map((alert) => alert.alertType)).toEqual([
+      'rate_limit_store_unavailable',
+      'rate_limit_store_unavailable',
     ]);
+    expect(reporting.lines).toHaveLength(2);
   });
 
-  it('allows an allow policy through an outage and alerts once per 15 minutes', async () => {
+  it('allows an allow policy through an outage, alerting once per 15 minutes', async () => {
     const reporting = createRecordingReporting();
     const rateLimiter = createRateLimiter({
       store: createFakeCounterStore({ failure: FAILED_STORE }),
@@ -114,7 +133,11 @@ describe('createRateLimiter', () => {
     const decisions = [
       await rateLimiter.check({ policy: LOGIN, clientId: CLIENT, now: WINDOW_START }),
       await rateLimiter.check({ policy: LOGIN, clientId: CLIENT, now: WINDOW_START + 60_000 }),
-      await rateLimiter.check({ policy: LOGIN, clientId: CLIENT, now: WINDOW_START + 900_000 }),
+      await rateLimiter.check({
+        policy: LOGIN,
+        clientId: CLIENT,
+        now: WINDOW_START + FIFTEEN_MINUTES_MS,
+      }),
     ];
 
     expect(decisions).toEqual([{ isAllowed: true }, { isAllowed: true }, { isAllowed: true }]);
@@ -150,6 +173,25 @@ describe('createRateLimiter', () => {
     expect(decision).toMatchObject({ isAllowed: false, reason: 'storeUnavailable' });
   });
 
+  it.each([
+    [true, 'preview', false],
+    [false, 'production', true],
+  ])(
+    'lets requireStore=%s override VERCEL_ENV=%s (allowed: %s)',
+    async (requireStore, vercelEnv, isAllowed) => {
+      vi.stubEnv('VERCEL_ENV', vercelEnv);
+      const rateLimiter = createRateLimiter({
+        store: createFakeCounterStore({ failure: UNCONFIGURED_STORE }),
+        requireStore,
+        ...createRecordingReporting(),
+      });
+
+      const decision = await rateLimiter.check({ policy: SIGNUP, clientId: CLIENT });
+
+      expect(decision.isAllowed).toBe(isAllowed);
+    },
+  );
+
   it('stops at the first refusal, so a longer window behind it is not spent', async () => {
     const store = createFakeCounterStore();
     const rateLimiter = createRateLimiter({ store, ...createRecordingReporting() });
@@ -158,12 +200,28 @@ describe('createRateLimiter', () => {
       { policy: SIGNUP_DAILY, clientId: CLIENT },
     ];
 
-    for (const _attempt of [1, 2, 3, 4]) {
-      await rateLimiter.checkAll({ checks, now: WINDOW_START });
-    }
+    await repeatInSequence({
+      times: 4,
+      attempt: () => rateLimiter.checkAll({ checks, now: WINDOW_START }),
+    });
 
     const dailyKeys = store.incrementedKeys.filter((key) => key.includes(':signup_daily:'));
     expect(dailyKeys).toHaveLength(2);
+  });
+
+  it.each([
+    ['a limit of NaN', { limit: Number.NaN }],
+    ['a limit of zero', { limit: 0 }],
+    ['a window of zero', { windowSeconds: 0 }],
+    ['a fractional window', { windowSeconds: 1.5 }],
+  ])('throws on %s instead of refusing everyone', async (_case, override) => {
+    const store = createFakeCounterStore();
+    const rateLimiter = createRateLimiter({ store, ...createRecordingReporting() });
+
+    await expect(
+      rateLimiter.check({ policy: { ...SIGNUP, ...override }, clientId: CLIENT }),
+    ).rejects.toThrow(/signup/);
+    expect(store.incrementedKeys).toEqual([]);
   });
 });
 
@@ -197,17 +255,16 @@ describe('refuseIfRateLimited', () => {
       store: createFakeCounterStore(),
       ...createRecordingReporting(),
     });
-    const request = {
-      rateLimiter,
-      checks: [{ policy: SIGNUP, clientId: CLIENT }],
-      overLimitMessage: 'Slow down.',
-    };
 
-    const responses = [
-      await refuseIfRateLimited(request),
-      await refuseIfRateLimited(request),
-      await refuseIfRateLimited(request),
-    ];
+    const responses = await repeatInSequence({
+      times: 3,
+      attempt: () =>
+        refuseIfRateLimited({
+          rateLimiter,
+          checks: [{ policy: SIGNUP, clientId: CLIENT }],
+          overLimitMessage: 'Slow down.',
+        }),
+    });
 
     expect(responses.slice(0, 2)).toEqual([null, null]);
     expect(responses[2]?.status).toBe(429);

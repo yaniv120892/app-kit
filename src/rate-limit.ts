@@ -1,7 +1,5 @@
-import type { CounterStoreFailureCause } from './counter-store.types.js';
-import type { GuardReporting } from './guard-reporting.types.js';
-import { secondsUntil } from './seconds-until.js';
-import { isStoreOutage } from './store-outage.js';
+import type { CounterReading } from './counter-store.types.js';
+import { assertPositiveInteger } from './positive-integer.js';
 import type {
   RateLimitCheck,
   RateLimitDecision,
@@ -10,6 +8,14 @@ import type {
   RateLimitPolicy,
   RateLimitRefusal,
 } from './rate-limit.types.js';
+import { secondsUntil } from './seconds-until.js';
+import {
+  createStoreOutageReporter,
+  isProductionDeployment,
+  isStoreOutage,
+  STORE_UNAVAILABLE_RETRY_AFTER_SECONDS,
+} from './store-outage.js';
+import type { StoreOutageReporter } from './store-outage.types.js';
 
 export type {
   RateLimitCheck,
@@ -23,24 +29,29 @@ export type {
 
 export const RETRY_AFTER_HEADER = 'retry-after';
 
-const STORE_UNAVAILABLE_RETRY_AFTER_SECONDS = 60;
-const FAIL_OPEN_REPORT_INTERVAL_MS = 15 * 60 * 1000;
 const STORE_UNAVAILABLE_MESSAGE = 'This is temporarily unavailable. Try again in a minute.';
+
+type UnavailableReading = Extract<CounterReading, { status: 'unavailable' }>;
 
 /**
  * A fixed window per client. When the count cannot be taken, the policy's `whenStoreUnavailable`
- * decides: `allow` lets the request through and alerts at most once per 15 minutes per policy,
- * `refuse` answers it as unavailable and alerts every time (the alerter caps the volume).
+ * decides: `allow` lets the request through, `refuse` answers it as unavailable. Either way the
+ * outage is logged and alerted at most once per 15 minutes per policy and server instance.
  */
-export function createRateLimiter({ store, logger, alerts }: RateLimiterOptions): RateLimiter {
-  const reporting: GuardReporting = { logger, alerts };
-  const failOpenReportedAt = new Map<string, number>();
+export function createRateLimiter({
+  store,
+  logger,
+  alerts,
+  requireStore = isProductionDeployment(),
+}: RateLimiterOptions): RateLimiter {
+  const reportStoreOutage = createStoreOutageReporter({ logger, alerts });
 
   async function check({
     policy,
     clientId,
     now = Date.now(),
   }: RateLimitCheck & { now?: number }): Promise<RateLimitDecision> {
+    assertPolicyNumbers(policy);
     const windowMs = policy.windowSeconds * 1000;
     const windowIndex = Math.floor(now / windowMs);
     const reading = await store.increment({
@@ -49,14 +60,10 @@ export function createRateLimiter({ store, logger, alerts }: RateLimiterOptions)
     });
 
     if (reading.status === 'unavailable') {
-      return decideWithoutCount({
-        policy,
-        cause: reading.cause,
-        detail: reading.detail,
-        now,
-        reporting,
-        failOpenReportedAt,
-      });
+      const isOutage = isStoreOutage({ cause: reading.cause, requireStore });
+      return isOutage
+        ? decideDuringOutage({ policy, reading, now, reportStoreOutage })
+        : { isAllowed: true };
     }
     if (reading.hits <= policy.limit) {
       return { isAllowed: true };
@@ -130,36 +137,40 @@ export async function refuseIfRateLimited({
   return decision.isAllowed ? null : rateLimitRefusalResponse({ decision, overLimitMessage });
 }
 
-function decideWithoutCount({
+function decideDuringOutage({
   policy,
-  cause,
-  detail,
+  reading,
   now,
-  reporting,
-  failOpenReportedAt,
+  reportStoreOutage,
 }: {
   policy: RateLimitPolicy;
-  cause: CounterStoreFailureCause;
-  detail: string | undefined;
+  reading: UnavailableReading;
   now: number;
-  reporting: GuardReporting;
-  failOpenReportedAt: Map<string, number>;
+  reportStoreOutage: StoreOutageReporter;
 }): RateLimitDecision {
-  if (!isStoreOutage(cause)) {
-    return { isAllowed: true };
-  }
+  const fields = { policy: policy.name, cause: reading.cause, detail: reading.detail };
   if (policy.whenStoreUnavailable === 'allow') {
-    reportFailingOpen({ policy, cause, detail, now, reporting, failOpenReportedAt });
+    reportStoreOutage({
+      throttleKey: policy.name,
+      logMessage: 'rate_limit_allowed_store_unavailable',
+      fields,
+      alert: {
+        alertType: 'rate_limit_store_unavailable_failing_open',
+        title: `Allowing ${policy.name} requests without a limit: the rate-limit store is ${reading.cause}`,
+      },
+      now,
+    });
     return { isAllowed: true };
   }
-
-  reporting.logger.error(
-    { policy: policy.name, cause, detail },
-    'rate_limit_refused_store_unavailable',
-  );
-  reporting.alerts.scheduleOpsAlert({
-    alertType: 'rate_limit_store_unavailable',
-    title: `Refusing ${policy.name} requests: the rate-limit store is ${cause}`,
+  reportStoreOutage({
+    throttleKey: policy.name,
+    logMessage: 'rate_limit_refused_store_unavailable',
+    fields,
+    alert: {
+      alertType: 'rate_limit_store_unavailable',
+      title: `Refusing ${policy.name} requests: the rate-limit store is ${reading.cause}`,
+    },
+    now,
   });
   return {
     isAllowed: false,
@@ -168,34 +179,7 @@ function decideWithoutCount({
   };
 }
 
-function reportFailingOpen({
-  policy,
-  cause,
-  detail,
-  now,
-  reporting,
-  failOpenReportedAt,
-}: {
-  policy: RateLimitPolicy;
-  cause: CounterStoreFailureCause;
-  detail: string | undefined;
-  now: number;
-  reporting: GuardReporting;
-  failOpenReportedAt: Map<string, number>;
-}): void {
-  const reportedAt = failOpenReportedAt.get(policy.name);
-  const isReportedRecently =
-    reportedAt !== undefined && now - reportedAt < FAIL_OPEN_REPORT_INTERVAL_MS;
-  if (isReportedRecently) {
-    return;
-  }
-  failOpenReportedAt.set(policy.name, now);
-  reporting.logger.error(
-    { policy: policy.name, cause, detail },
-    'rate_limit_allowed_store_unavailable',
-  );
-  reporting.alerts.scheduleOpsAlert({
-    alertType: 'rate_limit_store_unavailable_failing_open',
-    title: `Allowing ${policy.name} requests without a limit: the rate-limit store is ${cause}`,
-  });
+function assertPolicyNumbers(policy: RateLimitPolicy): void {
+  assertPositiveInteger({ name: `${policy.name} limit`, value: policy.limit });
+  assertPositiveInteger({ name: `${policy.name} windowSeconds`, value: policy.windowSeconds });
 }

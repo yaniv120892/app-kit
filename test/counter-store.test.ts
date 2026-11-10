@@ -1,9 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createUpstashCounterStore } from '../src/counter-store.js';
 
 const URL_SET = 'https://example-store.upstash.io/';
 const TOKEN_SET = 'test-token';
 const KEY = 'rate_limit:signup:ip:203.0.113.7:42';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function replyWith(body: unknown, status = 200) {
   return vi.fn<typeof fetch>(async () => Response.json(body, { status }));
@@ -52,6 +56,35 @@ describe('createUpstashCounterStore', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('releases the body of a non-2xx reply', async () => {
+    const reply = Response.json({ error: 'busy' }, { status: 503 });
+    const store = createUpstashCounterStore({
+      url: URL_SET,
+      token: TOKEN_SET,
+      fetch: vi.fn<typeof fetch>(async () => reply),
+    });
+
+    await store.increment({ key: KEY, ttlSeconds: 60 });
+
+    expect(reply.bodyUsed).toBe(true);
+  });
+
+  it('reads a count whose expiry failed as failed, so a key never outlives its window', async () => {
+    const store = createUpstashCounterStore({
+      url: URL_SET,
+      token: TOKEN_SET,
+      fetch: replyWith([{ result: 3 }, { error: 'ERR value is not an integer or out of range' }]),
+    });
+
+    const reading = await store.increment({ key: KEY, ttlSeconds: 60 });
+
+    expect(reading).toEqual({
+      status: 'unavailable',
+      cause: 'failed',
+      detail: 'EXPIRE was not applied',
+    });
+  });
+
   it('reads a reply of the wrong shape as failed', async () => {
     const store = createUpstashCounterStore({
       url: URL_SET,
@@ -95,7 +128,6 @@ describe('createUpstashCounterStore', () => {
     await store.increment({ key: KEY, ttlSeconds: 60 });
 
     expect(timeoutSpy).toHaveBeenCalledWith(1000);
-    timeoutSpy.mockRestore();
   });
 
   it('keeps the key out of the failure detail', async () => {

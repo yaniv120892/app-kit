@@ -13,12 +13,22 @@ export type DailyBudget = {
   globalLimit: number;
 };
 
-export type DailyBudgetReservation = GuardReporting & {
+export type DailyBudgetOptions = GuardReporting & {
+  store: CounterStore;
+  /**
+   * Whether a store nobody configured counts as an outage. Defaults to true on the production
+   * deployment (`VERCEL_ENV=production`) only; pass true on a host that does not set it.
+   */
+  requireStore?: boolean;
+};
+
+export type DailyBudgetRequest = {
   budget: DailyBudget;
   subjectId: string;
-  store: CounterStore;
   now?: number;
 };
+
+export type DailyBudgetReservation = DailyBudgetOptions & DailyBudgetRequest;
 
 export type DailyBudgetDecision =
   | { isAllowed: true }
@@ -28,3 +38,7 @@ export type DailyBudgetDecision =
       reason: 'subjectDailyLimit' | 'globalDailyLimit' | 'storeUnavailable';
       retryAfterSeconds: number;
     };
+
+export type DailyBudgets = {
+  reserve(request: DailyBudgetRequest): Promise<DailyBudgetDecision>;
+};

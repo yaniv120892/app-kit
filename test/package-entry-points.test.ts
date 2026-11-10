@@ -12,7 +12,7 @@ const entryPoints = [
   },
   {
     entryPoint: '@yaniv120892/app-kit/daily-budget',
-    expectedExports: ['reserveDailyBudget', 'isFeatureDisabled'],
+    expectedExports: ['createDailyBudget', 'reserveDailyBudget', 'isFeatureDisabled'],
   },
   {
     entryPoint: '@yaniv120892/app-kit/rate-limit',
