@@ -18,7 +18,7 @@ logger and the ops alerter are passed in.
 ## Install
 
 ```bash
-npm install github:yaniv120892/app-kit#v0.1.0
+npm install github:yaniv120892/app-kit#v0.2.0
 ```
 
 Then check that the lockfile's `resolved` names the tag's commit.
