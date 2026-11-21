@@ -18,7 +18,7 @@ logger and the ops alerter are passed in.
 ## Install
 
 ```bash
-npm install github:yaniv120892/app-kit#v0.1.0
+npm install github:yaniv120892/app-kit#v0.2.0
 ```
 
 Then check that the lockfile's `resolved` names the tag's commit.
@@ -257,6 +257,9 @@ alert titles say "uses" where they said "turns".
 
 ## Release
 
-Bump `version` in the same PR as the change — Vercel caches a git dependency by version, so a
-same-version change never reaches a deployed app. After the squash-merge, tag the merge commit:
-`gh release create v<version> --generate-notes`.
+1. Bump `version` in `package.json` in the same PR as the change. Vercel caches a git dependency
+   by version, so a same-version change never reaches a deployed app.
+2. After the squash-merge, tag the merge commit:
+   `gh release create v<version> --target <full 40-char merge-commit SHA> --generate-notes`.
+   Without `--target`, the tag lands on whatever `main` points at, and a short SHA fails with 422.
+3. Consumers bump the tag in both `package.json` and their CI `uses:` line.
